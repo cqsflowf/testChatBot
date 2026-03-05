@@ -1,35 +1,31 @@
-# 全双工语音对话系统依赖
-# ========================
+# 全双工语音对话系统 v3.0 依赖
+# =============================
 
 # Web框架
 fastapi>=0.100.0
 uvicorn>=0.23.0
 websockets>=11.0
 
-# 音频处理
+# 声学VAD
 webrtcvad>=2.0.10
+
+# 音频处理
 numpy>=1.24.0
-sounddevice>=0.4.6
 
-# AI/ML
+# AI/ML - Qwen模型
 openai>=1.0.0
-edge-tts>=6.1.0
 dashscope>=1.20.0
+edge-tts>=6.1.0
 
-# 配置和工具
+# 配置管理
 pyyaml>=6.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
-setuptools>=60.0.0
 
-# 异步
+# 异步支持
 aiohttp>=3.8.0
-aiofiles>=23.0.0
 
 # 测试
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 httpx>=0.24.0
-
-# 日志
-loguru>=0.7.0
