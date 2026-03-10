@@ -1,0 +1,181 @@
+问题背景
+
+ 用户反馈：在TTS播报和LLM推理时，系统不聆听打断。
+
+ 一、状态机状态定义
+
+ 系统定义了5个对话状态（DialogState）：
+
+ ┌────────────┬──────────────┬─────────────────────────────┐
+ │    状态    │     含义     │          状态转换           │
+ ├────────────┼──────────────┼─────────────────────────────┤
+ │ IDLE       │ 空闲         │ → LISTENING                 │
+ ├────────────┼──────────────┼─────────────────────────────┤
+ │ LISTENING  │ 监听用户语音 │ → PROCESSING, IDLE          │
+ ├────────────┼──────────────┼─────────────────────────────┤
+ │ PROCESSING │ 处理ASR结果  │ → THINKING, LISTENING, IDLE │
+ ├────────────┼──────────────┼─────────────────────────────┤
+ │ THINKING   │ LLM推理中    │ → SPEAKING, LISTENING, IDLE │
+ ├────────────┼──────────────┼─────────────────────────────┤
+ │ SPEAKING   │ TTS播报中    │ → LISTENING, IDLE           │
+ └────────────┴──────────────┴─────────────────────────────┘
+
+ 关键代码 (state_machine.py:15-21):
+ TRANSITIONS = {
+     DialogState.IDLE: [DialogState.LISTENING],
+     DialogState.LISTENING: [DialogState.PROCESSING, DialogState.IDLE],
+     DialogState.PROCESSING: [DialogState.THINKING, DialogState.LISTENING, DialogState.IDLE],
+     DialogState.THINKING: [DialogState.SPEAKING, DialogState.LISTENING, DialogState.IDLE],
+     DialogState.SPEAKING: [DialogState.LISTENING, DialogState.IDLE],
+ }
+
+ 二、当前打断检测逻辑
+
+ 2.1 打断检测入口
+
+ 位置: system.py:191-195
+
+ # ========== 2. SPEAKING状态下检测打断 ==========
+ if self.dialog_state.state == DialogState.SPEAKING:
+     if self.acoustic_vad.check_interrupt(audio_chunk):
+         # 检测到人声，启动打断确认模式
+         return await self._start_interrupt_confirmation()
+
+ 2.2 can_interrupt() 方法定义
+
+ 位置: state_machine.py:91-93
+
+ def can_interrupt(self) -> bool:
+     """是否可以打断"""
+     return self._state == DialogState.SPEAKING
+
+ 2.3 is_busy() 方法定义
+
+ 位置: state_machine.py:95-97
+
+ def is_busy(self) -> bool:
+     """是否忙碌"""
+     return self._state in [DialogState.PROCESSING, DialogState.THINKING, DialogState.SPEAKING]
+
+ 三、打断时序分析
+
+ 3.1 允许打断的状态
+
+ ┌────────────┬──────────────┬──────────────────────────┐
+ │    状态    │ 是否允许打断 │           说明           │
+ ├────────────┼──────────────┼──────────────────────────┤
+ │ SPEAKING   │ ✅ 允许      │ 唯一允许打断的状态       │
+ ├────────────┼──────────────┼──────────────────────────┤
+ │ LISTENING  │ ❌ 不需要    │ 正在监听用户输入         │
+ ├────────────┼──────────────┼──────────────────────────┤
+ │ PROCESSING │ ❌ 不允许    │ ASR结果处理阶段          │
+ ├────────────┼──────────────┼──────────────────────────┤
+ │ THINKING   │ ❌ 不允许    │ LLM推理阶段 - 不响应打断 │
+ ├────────────┼──────────────┼──────────────────────────┤
+ │ IDLE       │ ❌ 不需要    │ 空闲状态                 │
+ └────────────┴──────────────┴──────────────────────────┘
+
+ 3.2 时间线分析
+
+ 用户说话 → [LISTENING] → ASR完成 → [PROCESSING] → 语义判断 → [THINKING] → LLM推理 → [SPEAKING] → TTS播报
+                         ↑                                    ↑                      ↑
+                         不检测打断                           不检测打断              检测打断
+
+ 3.3 关键问题
+
+ 核心问题：打断检测代码 check_interrupt() 只在 SPEAKING 状态下执行。
+
+ 这意味着：
+ - LLM推理阶段（THINKING状态）：用户说话无法打断
+ - TTS播报阶段（SPEAKING状态）：用户说话可以打断
+
+ 四、打断确认机制
+
+ 当检测到打断时，系统进入"打断确认模式"：
+
+ 4.1 流程
+
+ 1. 检测到人声 → 启动打断确认模式 (_start_interrupt_confirmation)
+ 2. 语义VAD判断是否为有效人声
+ 3. 有效人声 → 停止TTS，继续接收用户输入
+ 4. 非有效人声（咳嗽、嗯等）→ 取消打断，继续播报
+ 5. 超时（1500ms）→ 根据内容决定
+
+ 4.2 声学VAD打断检测阈值
+
+ 位置: acoustic_vad.py - 需要连续3帧（60ms）检测到人声才确认打断
+
+ def check_interrupt(self, audio_frame: bytes) -> bool:
+     is_speech = self._detect_speech(audio_frame)
+     if is_speech:
+         self._interrupt_speech_frames += 1
+         if self._interrupt_speech_frames >= self._interrupt_threshold_frames:  # 默认3帧
+             return True
+     else:
+         self._interrupt_speech_frames = 0
+     return False
+
+ 五、气泡（时间空隙）分析
+
+ 5.1 完整流程时间线
+
+ 阶段                  状态          打断检测    时间长度
+ ────────────────────────────────────────────────────────
+ 用户开始说话          →            -          -
+ VAD检测到语音         LISTENING    不检测      ~100-300ms
+ ASR流式处理           LISTENING    不检测      用户说话时长
+ 静音检测              LISTENING    不检测      500-2000ms
+ ASR结果处理           PROCESSING   不检测      ~50-200ms
+ 语义VAD判断           PROCESSING   不检测      ~50-100ms
+ ────────────────────────────────────────────────────────
+ LLM推理               THINKING     ❌不检测    1-10秒（不可预测）
+ ────────────────────────────────────────────────────────
+ TTS开始播报           SPEAKING     ✅检测      -
+ TTS播报中             SPEAKING     ✅检测      播报时长
+ ────────────────────────────────────────────────────────
+
+ 5.2 无法打断的时间空隙
+
+ 最大空隙 = THINKING阶段时间 + PROCESSING阶段时间
+
+ 典型情况：
+ - PROCESSING阶段：~100-300ms
+ - THINKING阶段（LLM推理）：1-10秒（取决于LLM响应速度）
+ - 总空隙：可能达到10秒以上
+
+ 六、问题总结
+
+ 当前机制的限制
+
+ 1. LLM推理期间（THINKING状态）完全不检测打断
+   - 用户在这期间说话会被完全忽略
+   - 需要等LLM开始输出、TTS开始播放才能打断
+ 2. 打断检测时机过晚
+   - 必须等到SPEAKING状态才开始检测
+   - 用户在LLM思考期间说的话无法触发打断
+ 3. 用户体验影响
+   - 如果LLM推理时间长，用户可能重复说话
+   - 系统不会响应，直到TTS开始播放
+
+ 七、潜在改进方向（待讨论）
+
+ 方案A：扩展打断检测到THINKING状态
+
+ - 在THINKING状态也检测用户人声
+ - 检测到打断时取消LLM请求
+
+ 方案B：在所有忙碌状态检测打断
+
+ - PROCESSING和THINKING状态都检测打断
+ - 使用interrupt标志控制后续流程
+
+ 方案C：后台持续监听
+
+ - 无论什么状态，都持续进行VAD检测
+ - 维护音频缓冲区，打断时可以从缓冲区开始处理
+
+ ---
+ 文件路径参考:
+ - 状态机定义: src/voice_dialog/core/state_machine.py
+ - 主系统逻辑: src/voice_dialog/system.py
+ - 声学VAD: src/voice_dialog/modules/acoustic_vad.py
