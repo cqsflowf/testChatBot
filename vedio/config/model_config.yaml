@@ -1,0 +1,137 @@
+# 全双工语音对话系统 v3.4 配置文件
+# ====================================
+# 核心变化：统一使用 qwen3-flash 系列模型 + qwen3-tts-flash
+
+# Qwen ASR 17B 配置 (独立ASR模块 - 流式)
+QWEN_ASR:
+  api_key: "${DASHSCOPE_API_KEY}"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "paraformer-realtime-v2"  # Qwen ASR 17B 实时识别
+  frame_duration_ms: 20            # 帧长20ms
+  sample_rate: 16000
+  format: "pcm"
+  enable_words_result: true
+  enable_punctuation: true
+
+# Qwen Omni Flash 配置 (情绪识别 - 音频输入)
+# 用于并行情绪识别，支持音频输入
+QWEN_OMNI:
+  api_key: "${DASHSCOPE_API_KEY}"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen3-omni-flash"
+
+# 语义VAD配置 (流式判断)
+SEMANTIC_VAD:
+  enabled: true
+  model: "qwen-flash"
+  threshold: 0.7
+  # 流式判断配置
+  streaming:
+    min_text_length: 2      # 最小文本长度才开始判断
+    max_wait_ms: 5000       # 最大等待时间
+  states:
+    - "complete"      # 用户说完
+    - "continuing"    # 用户继续说
+    - "interrupted"   # 被打断
+    - "rejected"      # 拒识/无效输入
+
+# 情绪识别配置 (并行)
+# 使用 qwen3-omni-flash 的音频输入能力
+EMOTION:
+  enabled: true
+  model: "qwen3-omni-flash"
+  mode: "parallel"  # 并行模式
+  # 每次只判断完整一句话的情绪
+  sentence_based: true
+  use_audio: true   # 使用音频输入进行情绪识别
+
+  # 基于关键词的情绪检测
+  keywords:
+    positive:
+      - "太好了"
+      - "谢谢"
+      - "棒"
+      - "开心"
+      - "很好"
+    negative:
+      - "糟糕"
+      - "不行"
+      - "失败"
+      - "难过"
+    angry:
+      - "生气"
+      - "烦死了"
+      - "什么破"
+      - "太慢了"
+    sad:
+      - "伤心"
+      - "难过"
+      - "哭"
+    surprised:
+      - "哇"
+      - "天哪"
+      - "不会吧"
+
+# LLM任务规划器配置
+LLM:
+  provider: "qwen"
+  api_key: "${DASHSCOPE_API_KEY}"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen-flash"
+
+  # 情绪上下文
+  emotion_context:
+    enabled: true
+    include_intensity: true
+
+  # 工具调用
+  tools:
+    enabled: true
+    timeout: 30
+
+  # 生成配置
+  generation:
+    temperature: 0.7
+    max_tokens: 1024
+
+# TTS配置
+# 使用 qwen3-tts-flash 进行语音合成
+TTS:
+  provider: "qwen3"  # qwen3
+  model: "qwen3-tts-flash"
+  voice: "Maia"
+  sample_rate: 24000
+
+# 声学VAD配置
+# 使用 Silero VAD 进行语音活动检测
+ACOUSTIC_VAD:
+  engine: "silero"  # 使用Silero VAD
+  aggressiveness: 3  # WebRTC备选时使用
+  frame_duration_ms: 20  # 帧长20ms
+  silence_threshold_ms: 500  # 静音超时500ms
+  padding_duration_ms: 150
+
+# WebSocket服务器配置
+SERVER:
+  host: "0.0.0.0"
+  port: 8765
+  ping_interval: 20
+  ping_timeout: 20
+
+# 系统配置
+SYSTEM:
+  # 打断检测
+  interrupt:
+    enabled: true
+    keywords: ["停", "等等", "打断"]
+    audio_threshold: 0.6
+
+  # 多轮对话
+  conversation:
+    max_history: 10
+    context_window: 4096
+
+  # 日志
+  logging:
+    level: "INFO"
+    file: "logs/dialog.log"

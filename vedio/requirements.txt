@@ -1,0 +1,35 @@
+# 全双工语音对话系统 v3.3 依赖
+# =============================
+
+# Web框架
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0
+
+# 声学VAD - Silero VAD (基于深度学习，更准确)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# 音频处理
+numpy>=1.24.0
+
+# AI/ML - Qwen模型
+openai>=1.0.0
+dashscope>=1.20.0
+edge-tts>=6.1.0
+
+# 配置管理
+pyyaml>=6.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# 日志
+loguru>=0.7.0
+
+# 异步支持
+aiohttp>=3.8.0
+
+# 测试
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0
