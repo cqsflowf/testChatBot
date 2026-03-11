@@ -6,14 +6,13 @@
 
 ### v3.5 新特性
 
-- **并发音频处理**：音频接收与 LLM 推理解耦，支持真正的全双工交互
-- **THINKING状态打断**：支持在LLM推理期间打断，取消LLM请求
-- **非阻塞架构**：WebSocket 主循环不再被 LLM 推理阻塞
-- **后台任务模型**：LLM 作为后台任务运行，音频持续接收
+- **并发音频处理架构**：音频接收与处理解耦，使用 `asyncio.Queue` 实现非阻塞接收
+- **THINKING状态打断**：支持在LLM推理期间打断，取消LLM后台任务
+- **后台任务模型**：LLM推理作为后台任务运行，不阻塞音频接收
+- **完整的打断场景覆盖**：支持 LLM推理中/TTS转换中/前端播报中 全阶段打断
 
 ### v3.4 新特性
 
-- **THINKING状态打断**：支持在LLM推理期间打断，取消LLM请求
 - **模型优化**：LLM和语义VAD使用 qwen-flash 模型，响应更快
 - **TTS升级**：使用 qwen3-tts-flash 替代 Edge TTS
 - **JSON解析增强**：语义VAD支持多种JSON格式解析，更加健壮
@@ -31,31 +30,53 @@
 
 - **语义驱动打断**：判断有效人声后立即停止TTS，不等声学静音阈值
 - **有效人声判断**：区分语气助词（嗯、啊）和有效语义内容
+- **噪声过滤**：识别咳嗽、环境音等噪声，不触发打断
 - **时延监控**：实时追踪各模块处理时延，便于性能分析
 - **打断测试套件**：完善的测试用例和自动化测试脚本
 
 ### 技术架构
 
 ```
-用户语音 → 声学VAD → ASR流式识别 → 语义VAD流式判断（有效人声判断）
-                ↓
-           情绪识别（并行，音频输入）
-                ↓
-           LLM流式输出 → TTS处理器（异步锁保证顺序）→ 按句子实时播报
-                ↓
-           工具调用（实时检测） → 工具执行 → 结果总结
-                ↓
-           时延追踪（全程监控）
+┌─────────────────────────────────────────────────────────────────┐
+│                    v3.5 并发架构                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  前端音频流 ──▶ process_audio() ──▶ asyncio.Queue (非阻塞)     │
+│                                            │                    │
+│                                            ▼                    │
+│                                   _audio_processing_loop()      │
+│                                            │                    │
+│                     ┌──────────────────────┼────────────────┐  │
+│                     ▼                      ▼                ▼  │
+│               声学VAD检测            ASR+情绪识别       打断检测  │
+│                     │                      │                │  │
+│                     └──────────────────────┴────────────────┘  │
+│                                            │                    │
+│                                            ▼                    │
+│                              _process_with_llm() (后台任务)     │
+│                                            │                    │
+│                                            ▼                    │
+│                              StreamingTTSProcessor → 音频播报   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+### 打断场景覆盖
+
+| 场景 | 状态 | 处理方式 |
+|------|------|----------|
+| LLM推理中 + 用户打断 | THINKING | 取消LLM任务 → 停止TTS → 清空队列 |
+| LLM已完成 + TTS转换中 + 用户打断 | THINKING/SPEAKING | 停止TTS处理器 → 清空队列 |
+| TTS已完成 + 前端播报中 + 用户新输入 | SPEAKING | 清空前端音频队列 → 接收新输入 |
 
 ## 模型配置
 
 | 模块 | 模型名称 | 用途 |
 |------|----------|------|
 | ASR | `paraformer-realtime-v2` | 语音转文字 |
-| 语义VAD | `qwen-flash` | 语义完整性判断 |
+| 语义VAD | `qwen3-flash` | 语义完整性判断 + 有效人声判断 |
 | 情绪识别 | `qwen3-omni-flash` | 音频情绪分析 |
-| LLM | `qwen-flash` | 对话推理、工具调用 |
+| LLM | `qwen3-flash` | 对话推理、工具调用 |
 | TTS | `qwen3-tts-flash` | 文字转语音 |
 | 声学VAD | `silero-vad` | 语音活动检测 |
 
@@ -121,7 +142,7 @@ vedio/
 │       │   ├── tools.py        # 工具引擎
 │       │   ├── tts.py          # 语音合成 + 流式TTS处理器
 │       │   └── qwen_omni.py    # Qwen Omni处理器
-│       ├── system.py           # 核心系统 v3.2
+│       ├── system.py           # 核心系统 v3.5（并发架构）
 │       └── websocket_server.py # WebSocket服务器
 ├── web/
 │   ├── index.html              # Web前端（支持流式显示）
@@ -192,6 +213,50 @@ SERVER:
   port: 8765
 ```
 
+## 并发架构详解 (v3.5)
+
+### 核心组件
+
+```python
+# 音频队列
+self._audio_queue: asyncio.Queue = asyncio.Queue()
+
+# 音频处理后台任务
+self._audio_processor_task: Optional[asyncio.Task] = None
+
+# LLM后台任务
+self._llm_task: Optional[asyncio.Task] = None
+```
+
+### 处理流程
+
+```
+1. 前端发送音频 → process_audio() 非阻塞放入队列
+2. _audio_processing_loop() 后台持续处理队列
+3. 检测到完整句子 → 创建 _llm_task 后台任务
+4. LLM流式输出 → StreamingTTSProcessor → 前端播报
+5. 打断时 → 取消 _llm_task + 停止TTS + 清空队列
+```
+
+### 打断处理
+
+```python
+async def _stop_tts_for_interrupt(self):
+    """语义VAD确认有效人声后停止TTS/LLM"""
+    self._should_stop_llm = True
+
+    # 停止流式TTS处理器
+    if self._streaming_tts:
+        self._streaming_tts.stop()
+
+    # 取消LLM后台任务
+    if self._llm_task and not self._llm_task.done():
+        self._llm_task.cancel()
+
+    # 通知前端清空音频队列
+    await self._notify_clear_audio()
+```
+
 ## LLM流式输出与TTS播报 (v3.2.3)
 
 ### 流式输出流程
@@ -237,6 +302,26 @@ TTS模块会自动清理文本中的格式符号，确保播报自然：
 
 ## 有效人声判断
 
+### 打断确认流程
+
+```
+声学VAD检测到人声
+       │
+       ▼
+启动打断确认模式（不立即停止TTS）
+       │
+       ▼
+ASR流式识别 + 语义VAD判断有效性
+       │
+       ├─▶ 有效人声 ──→ 停止TTS/LLM，继续接收输入
+       │
+       ├─▶ 语气助词 ──→ 取消打断，继续播报
+       │
+       ├─▶ 噪声 ──→ 取消打断，继续播报
+       │
+       └─▶ 待判断 ──→ 继续等待
+```
+
 ### 有效人声关键词（触发打断）
 
 ```
@@ -252,6 +337,12 @@ TTS模块会自动清理文本中的格式符号，确保播报自然：
 ```
 嗯、啊、呃、额、唔、哦、噢、哈、嘿、哎
 那个、就是、这个、然后、所以、但是、其实
+```
+
+### 噪声模式（不触发打断）
+
+```
+咳嗽、环境音、重复字符（如"嗯嗯嗯"）
 ```
 
 ## 支持的工具
@@ -302,6 +393,7 @@ python tests/test_interrupt_websocket.py
 | 打断响应时间 | < 500ms | < 1ms | 从有效人声判断到TTS停止 |
 | ASR帧长 | 20ms | 20ms | 平衡延迟与准确率 |
 | 声学VAD阈值 | 500ms | 500ms | Silero VAD静音检测 |
+| 打断确认超时 | 1500ms | 1500ms | 等待语义判断最大时间 |
 | LLM首字输出 | < 300ms | - | 从请求到首个输出 |
 
 ## API接口
@@ -323,9 +415,9 @@ ws://localhost:8765/ws/{client_id}
 | result | 后端→前端 | 对话结果 |
 | state_change | 后端→前端 | 状态变化 |
 | partial_asr | 后端→前端 | ASR部分结果 |
-| llm_chunk | 后端→前端 | LLM流式输出块 (v3.2.3新增) |
-| audio_chunk | 后端→前端 | TTS音频块 (v3.2.3新增) |
-| clear_audio | 后端→前端 | 清空音频队列 (v3.2.3新增) |
+| llm_chunk | 后端→前端 | LLM流式输出块 |
+| audio_chunk | 后端→前端 | TTS音频块 |
+| clear_audio | 后端→前端 | 清空音频队列 |
 | latency_update | 后端→前端 | 时延更新 |
 | tool_executing | 后端→前端 | 工具执行状态 |
 
@@ -348,6 +440,7 @@ ws://localhost:8765/ws/{client_id}
 | 编程语言 | Python 3.8+ | - |
 | Web框架 | FastAPI + Uvicorn | - |
 | 实时通信 | WebSocket | - |
+| 并发模型 | asyncio.Queue + 后台任务 | - |
 | ASR模型 | Qwen ASR 17B (Paraformer) | `paraformer-realtime-v2` |
 | 语义VAD | Qwen3-flash | `qwen3-flash` |
 | 情绪识别 | Qwen3-omni-flash (音频输入) | `qwen3-omni-flash` |
@@ -369,6 +462,16 @@ ws://localhost:8765/ws/{client_id}
 ```
 logs/voice_dialog_YYYYMMDD_HHMMSS.log
 ```
+
+## 版本历史
+
+| 版本 | 主要更新 |
+|------|----------|
+| v3.5 | 并发音频处理架构、THINKING状态打断、后台任务模型 |
+| v3.4 | 模型优化(qwen-flash)、TTS升级(qwen3-tts-flash) |
+| v3.3 | Silero VAD、LLM流式输出、流式TTS播报 |
+| v3.2 | 语义驱动打断、有效人声判断、时延监控 |
+| v3.0 | 独立ASR模块、流式语义VAD、并行情绪识别 |
 
 ## 许可证
 
