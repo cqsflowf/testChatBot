@@ -10,6 +10,7 @@
 """
 import asyncio
 import json
+import base64
 from typing import Optional, Callable, AsyncIterator
 from ..core.logger import logger
 
