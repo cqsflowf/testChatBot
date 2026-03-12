@@ -173,7 +173,7 @@ class QwenASRProcessor:
     # 使用 Paraformer 实时识别，或基于qwen3-asr-flash-realtime
     MODEL_NAME = "paraformer-realtime-v2"
     FRAME_DURATION_MS = 20  # 帧长20ms
-    DEFAULT_URL = "wss://dashscope.aliyuncs.com/api-wa/v1/realtime"
+    DEFAULT_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
 
     def __init__(self):
         self.config = get_config().qwen_asr if hasattr(get_config(), 'qwen_asr') else {}
