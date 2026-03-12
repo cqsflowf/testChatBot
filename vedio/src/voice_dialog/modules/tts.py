@@ -18,6 +18,9 @@ import re
 import base64
 import os
 from typing import Optional, Callable, AsyncIterator, List
+
+from pydub import AudioSegment
+
 from ..core.logger import logger
 
 from ..core.types import TTSResult
@@ -31,6 +34,20 @@ except ImportError:
     HAS_DASHSCOPE = False
     logger.warning("dashscope未安装，Qwen3 TTS将不可用")
 
+
+def pcm_to_wav(pcm_data, sample_rate=24000, channels=1, sample_width=2):
+    audio = AudioSegment(
+        data=pcm_data,
+        sample_width=sample_width,
+        frame_rate=sample_rate,
+        channels=channels
+    )
+
+    wav_buffer = io.BytesIO()
+    audio.export(wav_buffer, format="wav")
+    wav_data = wav_buffer.getvalue()
+
+    return wav_data
 
 def clean_text_for_tts(text: str) -> str:
     """
@@ -487,6 +504,7 @@ class StreamingTTSProcessor:
 
         # 文本缓冲区（消费者线程访问）
         self._text_buffer = ""
+        self._emotion = ""
 
         # 生产者-消费者队列
         self._text_queue: asyncio.Queue = asyncio.Queue()
@@ -517,7 +535,7 @@ class StreamingTTSProcessor:
         self._consumer_task = asyncio.create_task(self._consumer_loop())
         logger.debug("[TTS] 消费者任务已启动")
 
-    def add_text_nowait(self, text: str) -> bool:
+    def add_text_nowait(self, text: str, emotion: str) -> bool:
         """
         非阻塞添加文本到队列（用于LLM回调）
 
@@ -539,9 +557,10 @@ class StreamingTTSProcessor:
         # 使用 put_nowait，完全非阻塞
         self._text_queue.put_nowait(text)
         self._total_text += text
+        self._emotion = emotion
         return True
 
-    async def add_text(self, text: str) -> bool:
+    async def add_text(self, text: str, emotion: str) -> bool:
         """
         添加LLM输出的文本块（异步版本）
 
@@ -557,6 +576,7 @@ class StreamingTTSProcessor:
         # 非阻塞放入队列
         await self._text_queue.put(text)
         self._total_text += text
+        self._emotion = emotion
         return True
 
     async def _consumer_loop(self):
@@ -753,12 +773,22 @@ class StreamingTTSProcessor:
         def _sync_synthesize():
             audio_data = b""
             try:
+                emotion_contexts = {
+                    "positive": "用户现在心情不错，你可以用轻松愉快的语气回应，分享ta的喜悦。",
+                    "negative": "用户情绪有些低落，请用温和关心的语气回应，表达理解和支持。",
+                    "angry": "用户现在有些烦躁，请先安抚情绪，语气温和，再帮ta解决问题。",
+                    "sad": "用户现在心情难过，请表达关心和理解，让ta感到被陪伴。",
+                    "surprised": "用户感到惊喜，你可以一起感受这份惊喜，保持好奇。",
+                    "neutral": "用户情绪平和，正常交流即可。",
+                }
                 # 调用Qwen3 TTS流式API（同步调用）
                 response = MultiModalConversation.call(
-                    model="qwen3-tts-flash",
+                    model="qwen3-tts-instruct-flash",
                     text=text,
                     voice=self.voice,
                     language_type="Chinese",
+                    instructions=emotion_contexts.get(self._emotion, ""),
+                    optimize_instructions=True,
                     stream=True
                 )
 
@@ -774,7 +804,7 @@ class StreamingTTSProcessor:
                             wav_bytes = base64.b64decode(audio.data)
                             audio_data += wav_bytes
 
-                return audio_data
+                return pcm_to_wav(audio_data)
 
             except Exception as e:
                 logger.error(f"[TTS] Qwen3 TTS流式合成失败: {e}")
