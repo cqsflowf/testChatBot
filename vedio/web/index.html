@@ -610,7 +610,8 @@
             // 添加助手回复（LLM总结后的响应）
             if (data.response) {
                 addMessage('assistant', data.response, {
-                    toolCalls: data.tool_calls
+                    toolCalls: data.tool_calls,
+                    llmEmotion: data.llm_emotion  // 大模型情绪
                 });
 
                 // 注意：音频通过 audio_chunk 消息实时播放
@@ -642,6 +643,9 @@
             let metaHtml = '<div class="message-meta">';
             if (extras.emotion) {
                 metaHtml += `<span class="emotion-tag emotion-${extras.emotion}">${getEmotionText(extras.emotion)}</span>`;
+            }
+            if (extras.llmEmotion) {
+                metaHtml += `<span class="emotion-tag emotion-${extras.llmEmotion}">AI: ${getEmotionText(extras.llmEmotion)}</span>`;
             }
             if (extras.toolCalls && extras.toolCalls.length > 0) {
                 metaHtml += `<span style="color: #3a7bd5;">工具: ${extras.toolCalls.map(t => t.name).join(', ')}</span>`;

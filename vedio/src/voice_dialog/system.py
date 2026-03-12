@@ -882,6 +882,7 @@ class VoiceDialogSystem:
             dialog_state=DialogState.SPEAKING,
             tool_calls=llm_response.tool_calls,
             tool_results=tool_results,
+            llm_emotion=llm_response.llm_emotion,
         )
 
         await self._notify_result(result)

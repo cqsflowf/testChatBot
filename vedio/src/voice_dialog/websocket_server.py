@@ -188,7 +188,9 @@ class ConnectionManager:
                 # 只显示工具名称，不返回执行结果
                 "tool_calls": [{"name": tc.name} for tc in result.tool_calls],
                 # 不发送音频，因为已通过audio_chunk实时发送
-                "has_audio": False
+                "has_audio": False,
+                # 大模型情绪
+                "llm_emotion": result.llm_emotion.value
             }
         }
 

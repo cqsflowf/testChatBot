@@ -146,6 +146,7 @@ class LLMResponse:
     tool_results: List[ToolResult] = field(default_factory=list)
     final_response: str = ""  # 工具调用后的总结响应
     emotion_adapted: bool = False  # 是否进行了情绪适配
+    llm_emotion: EmotionType = EmotionType.NEUTRAL  # 大模型情绪类型
 
 
 @dataclass
@@ -180,6 +181,9 @@ class DialogResult:
     # 工具调用
     tool_calls: List[ToolCall] = field(default_factory=list)
     tool_results: List[ToolResult] = field(default_factory=list)
+
+    # 大模型情绪
+    llm_emotion: EmotionType = EmotionType.NEUTRAL  # 大模型情绪类型
 
     def to_dict(self) -> Dict:
         return {

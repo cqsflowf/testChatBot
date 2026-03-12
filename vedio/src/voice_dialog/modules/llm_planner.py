@@ -145,6 +145,22 @@ class LLMTaskPlanner:
         responses = self.EMOTION_RESPONSES.get(emotion, {}).get(level, [""])
         return random.choice(responses)
 
+    def _get_llm_emotion(self, user_emotion: EmotionType, intensity: float) -> EmotionType:
+        """
+        根据用户情绪和强度确定大模型的情绪
+        大模型会根据用户情绪做出相应的情绪回应
+        """
+        # 情绪映射：大模型对用户情绪的回应情绪
+        emotion_mapping = {
+            EmotionType.POSITIVE: EmotionType.POSITIVE,    # 用户开心，大模型也开心
+            EmotionType.NEGATIVE: EmotionType.SAD,         # 用户消极，大模型表示关心
+            EmotionType.ANGRY: EmotionType.NEUTRAL,        # 用户愤怒，大模型保持冷静
+            EmotionType.SAD: EmotionType.SAD,              # 用户悲伤，大模型表示同情
+            EmotionType.SURPRISED: EmotionType.SURPRISED,  # 用户惊讶，大模型也惊讶
+            EmotionType.NEUTRAL: EmotionType.NEUTRAL       # 用户中性，大模型也中性
+        }
+        return emotion_mapping.get(user_emotion, EmotionType.NEUTRAL)
+
     def _build_emotion_context(self, emotion: EmotionType, intensity: float) -> str:
         """构建情绪上下文提示"""
         base_context = self.EMOTION_CONTEXTS.get(emotion, "")
@@ -255,10 +271,14 @@ class LLMTaskPlanner:
                 if emotion_prefix and not response_text.startswith(emotion_prefix):
                     response_text = emotion_prefix + " " + response_text
 
+            # 大模型情绪：根据用户情绪和强度确定
+            llm_emotion = self._get_llm_emotion(llm_input.emotion, llm_input.emotion_intensity)
+
             return LLMResponse(
                 text=response_text,
                 tool_calls=tool_calls,
-                emotion_adapted=True
+                emotion_adapted=True,
+                llm_emotion=llm_emotion
             )
 
         except Exception as e:
@@ -403,10 +423,14 @@ class LLMTaskPlanner:
                 if emotion_prefix and not response_text.startswith(emotion_prefix):
                     final_text = emotion_prefix + " " + response_text
 
+            # 大模型情绪：根据用户情绪和强度确定
+            llm_emotion = self._get_llm_emotion(llm_input.emotion, llm_input.emotion_intensity)
+
             return LLMResponse(
                 text=final_text,
                 tool_calls=tool_calls,
-                emotion_adapted=True
+                emotion_adapted=True,
+                llm_emotion=llm_emotion
             )
 
         except Exception as e:
@@ -698,6 +722,9 @@ class LLMTaskPlanner:
         # ========== 生成响应 ==========
         prefix = self.EMOTION_PREFIXES.get(llm_input.emotion, "")
 
+        # 大模型情绪：根据用户情绪和强度确定
+        llm_emotion = self._get_llm_emotion(llm_input.emotion, llm_input.emotion_intensity)
+
         # 检查是否是询问名字
         if "叫什么名字" in text or "我叫什么" in text or "我姓什么" in text:
             user_name = self.context.get("user_name", "")
@@ -713,7 +740,8 @@ class LLMTaskPlanner:
             return LLMResponse(
                 text=response_text,
                 tool_calls=[],
-                emotion_adapted=True
+                emotion_adapted=True,
+                llm_emotion=llm_emotion
             )
 
         if tool_calls:
@@ -732,7 +760,8 @@ class LLMTaskPlanner:
         return LLMResponse(
             text=response_text,
             tool_calls=tool_calls,
-            emotion_adapted=True
+            emotion_adapted=True,
+            llm_emotion=llm_emotion
         )
 
     def _mock_summarize(self, tool_results: List[ToolResult]) -> str:
