@@ -31,6 +31,7 @@ from ..core.types import (
 )
 from ..core.config import get_config
 from ..core.tool_registry import tool_registry
+from .user_profile import UserIdentityRecognizer, UserType
 
 
 # 中国主要城市列表 - 扩展版
@@ -68,6 +69,8 @@ class LLMTaskPlanner:
 你不是冷冰冰的AI助手，而是一个懂倾听、会共情的朋友。你善于理解用户的情绪，并给出温暖的回应。
 
 {emotion_context}
+
+{user_identity_context}
 
 【说话风格】
 - 简洁：40字左右最佳，最多不超过100字，适合语音播报
@@ -168,6 +171,30 @@ class LLMTaskPlanner:
             intensity_percent = int(intensity * 100)
             return f"【用户情绪】\n{base_context}（强度：{intensity_percent}%）"
         return ""
+    
+    def _build_user_identity_context(self, user_type: UserType, confidence: float) -> str:
+        """构建用户身份上下文提示"""
+        if user_type == UserType.CHILD:
+            return f"""【用户身份】
+识别到用户可能是儿童（置信度：{int(confidence * 100)}%）。
+请用儿童的口吻回答：
+- 语气亲切温柔，像大姐姐/大哥哥一样
+- 用词简单易懂，避免复杂词汇
+- 多用比喻和生动的例子
+- 可以用"呀"、"呢"、"啦"等语气词
+- 回答要有趣味性，可以适当加入童趣元素
+- 对小朋友要有耐心和鼓励"""
+        elif user_type == UserType.ADULT:
+            return f"""【用户身份】
+识别到用户可能是成人（置信度：{int(confidence * 100)}%）。
+请用成人的口吻回答：
+- 语气专业理性，条理清晰
+- 直接高效，不啰嗦
+- 可以使用专业术语
+- 提供实用的建议和解决方案"""
+        else:
+            return """【用户身份】
+用户身份尚未确定，请保持中性友好的语气。"""
 
     def __init__(self):
         self.config = get_config().llm
@@ -175,6 +202,7 @@ class LLMTaskPlanner:
         self.conversation_history: List[Message] = []
         self.context: Dict[str, Any] = {}  # 存储对话上下文信息
         self._current_time: Optional[str] = None  # 缓存当前时间
+        self.user_recognizer = UserIdentityRecognizer()  # 用户身份识别器
         self._init_client()
 
     def _init_client(self):
@@ -215,6 +243,12 @@ class LLMTaskPlanner:
             return self._mock_plan(llm_input)
 
         try:
+            # 识别用户身份
+            user_profile = self.user_recognizer.recognize(llm_input.text)
+            user_type = user_profile.user_type
+            user_confidence = user_profile.confidence
+            logger.info(f"[用户身份] 类型: {user_type.value}, 置信度: {user_confidence:.2f}")
+            
             # 获取当前时间
             from datetime import datetime
             now = datetime.now()
@@ -226,12 +260,16 @@ class LLMTaskPlanner:
             emotion_context = ""
             if self.config.get("emotion_context", {}).get("enabled", True):
                 emotion_context = self._build_emotion_context(llm_input.emotion, llm_input.emotion_intensity)
+            
+            # 构建用户身份上下文
+            user_identity_context = self._build_user_identity_context(user_type, user_confidence)
 
             # 从 ToolRegistry 获取工具
             tools = await self._get_tools()
             tools_description = self._get_tools_description()
             system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(
                 emotion_context=emotion_context,
+                user_identity_context=user_identity_context,
                 tools_description=tools_description,
                 current_time=current_time,
                 current_location=current_location
@@ -315,6 +353,12 @@ class LLMTaskPlanner:
             return response
 
         try:
+            # 识别用户身份
+            user_profile = self.user_recognizer.recognize(llm_input.text)
+            user_type = user_profile.user_type
+            user_confidence = user_profile.confidence
+            logger.info(f"[用户身份] 类型: {user_type.value}, 置信度: {user_confidence:.2f}")
+            
             # 获取并缓存当前时间
             await self._update_current_time()
 
@@ -322,12 +366,16 @@ class LLMTaskPlanner:
             emotion_context = ""
             if self.config.get("emotion_context", {}).get("enabled", True):
                 emotion_context = self._build_emotion_context(llm_input.emotion, llm_input.emotion_intensity)
+            
+            # 构建用户身份上下文
+            user_identity_context = self._build_user_identity_context(user_type, user_confidence)
 
             # 从 ToolRegistry 获取工具
             tools = await self._get_tools()
             tools_description = self._get_tools_description()
             system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(
                 emotion_context=emotion_context,
+                user_identity_context=user_identity_context,
                 tools_description=tools_description,
                 current_time=self._current_time,
                 current_location=self.context.get("location", "上海")

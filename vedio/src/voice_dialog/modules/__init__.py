@@ -27,6 +27,7 @@ from .emotion import EmotionRecognizer, ParallelEmotionRecognizer, recognize_emo
 from .llm_planner import LLMTaskPlanner
 from .tools import ToolEngine, MCPClient, SKILLSEngine
 from .tts import TTSEngine, StreamingTTS, StreamingTTSProcessor
+from .user_profile import UserIdentityRecognizer, UserType, UserProfile
 # 保留旧模块以兼容
 from .qwen_omni import QwenOmniProcessor, QwenOmniStreamProcessor
 
@@ -57,4 +58,8 @@ __all__ = [
     "TTSEngine",
     "StreamingTTS",
     "StreamingTTSProcessor",
+    # 用户身份识别
+    "UserIdentityRecognizer",
+    "UserType",
+    "UserProfile",
 ]
