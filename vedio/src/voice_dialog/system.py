@@ -756,7 +756,7 @@ class VoiceDialogSystem:
             # 非阻塞放入TTS队列（使用put_nowait，不等待）
             if self._streaming_tts and not self._streaming_tts._should_stop:
                 try:
-                    self._streaming_tts.add_text_nowait(chunk)
+                    self._streaming_tts.add_text_nowait(chunk, emotion.value)
                 except asyncio.QueueFull:
                     logger.warning(f"[TTS] 队列已满，跳过文本块: {chunk[:20]}...")
             # 前端显示（创建任务，不阻塞）
@@ -847,7 +847,7 @@ class VoiceDialogSystem:
 
                 tool_tts = StreamingTTSProcessor(on_audio_chunk=on_tool_audio_chunk)
                 await tool_tts.start()  # v3.4: 启动消费者任务
-                await tool_tts.add_text(final_response)
+                await tool_tts.add_text(final_response, emotion.value)
                 tool_audio = await tool_tts.finalize()
                 full_audio = full_audio + tool_audio if full_audio else tool_audio
         else:
