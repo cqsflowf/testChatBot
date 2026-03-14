@@ -122,7 +122,7 @@ class ConnectionManager:
             return True
         return False
 
-    async def send_json(self, client_id: str, data: dict) -> bool:
+    async def _send_json(self, client_id: str, data: dict) -> bool:
         """
         发送JSON消息（线程安全，使用锁防止并发冲突）
 
@@ -171,6 +171,35 @@ class ConnectionManager:
                 # 检查是否需要断开
                 await self._check_and_disconnect(client_id)
                 return False
+
+    async def send_json(self, client_id: str, data: dict) -> bool:
+        """
+        发送JSON消息（带重试机制）
+
+        Args:
+            client_id: 客户端ID
+            data: 要发送的数据
+
+        Returns:
+            bool: 发送是否成功
+        """
+        max_retries = 3
+        retry_delay = 0.1  # 重试延迟（秒）
+
+        for attempt in range(max_retries):
+            success = await self._send_json(client_id, data)
+            if success:
+                return True
+
+            # 如果连接已断开，不再重试
+            if client_id not in self.active_connections:
+                return False
+
+            # 最后一次尝试失败后不再等待
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+
+        return False
 
     async def send_result(self, client_id: str, result: DialogResult):
         """发送对话结果 - 只发送LLM总结后的响应，不发送音频（音频已通过audio_chunk实时发送）"""
