@@ -39,7 +39,7 @@ class SileroVADWrapper:
         self._buffer = bytearray()  # 滑动窗口缓冲区
         self._last_result = False  # 上一次检测结果
         self._initialized = False  # 是否已初始化
-        self._fallback_threshold = 500  # 缓冲期间简单VAD阈值
+        self._fallback_threshold = 600  # v3.6: 降低到600，确保能检测到正常说话
         self._init_model()
 
     def _init_model(self):
@@ -110,8 +110,9 @@ class SileroVADWrapper:
             with torch.no_grad():
                 speech_prob = self._model(audio_tensor, sample_rate).item()
 
-            # 概率>0.5认为是语音
-            self._last_result = speech_prob > 0.5
+            # v3.6: 降低阈值到0.55，确保能检测到正常说话
+            # 概率>0.55认为是语音（从0.65降低到0.55）
+            self._last_result = speech_prob > 0.55
             self._initialized = True
 
             return self._last_result
@@ -187,7 +188,7 @@ class SimpleVAD:
     基于 RMS 音量检测
     """
 
-    def __init__(self, threshold: float = 700):  # 提高阈值以过滤更多噪声
+    def __init__(self, threshold: float = 600):  # v3.6: 降低到600，确保能检测到正常说话
         self.threshold = threshold
 
     def is_speech(self, frame: bytes, sample_rate: int = 16000) -> bool:

@@ -72,13 +72,19 @@ class StreamingASRCallback(RecognitionCallback):
                     logger.debug(f"ASR 流式结果: {text}")
 
                     # 回调通知 - 使用线程安全的方式
-                    if self._on_result and self._loop:
-                        # 使用 call_soon_threadsafe 在主线程事件循环中调度
-                        self._loop.call_soon_threadsafe(
-                            lambda: asyncio.create_task(
-                                self._on_result(text, is_final=False)
+                    if self._on_result and self._loop and not self._loop.is_closed():
+                        try:
+                            # 使用 call_soon_threadsafe 在主线程事件循环中调度
+                            self._loop.call_soon_threadsafe(
+                                lambda t=text: asyncio.create_task(
+                                    self._on_result(t, is_final=False)
+                                )
                             )
-                        )
+                        except RuntimeError as e:
+                            if "Event loop is closed" in str(e):
+                                logger.warning("ASR 回调时事件循环已关闭，跳过此次回调")
+                            else:
+                                raise
                     elif self._on_result:
                         # 没有事件循环，存储结果供后续处理
                         self._result_queue.append((text, False))
@@ -128,12 +134,18 @@ class OmniAsrCallback(OmniRealtimeCallback):
                     self.result_text = stash_text
                     logger.debug(f'Omni ASR 流式结果：{stash_text}')
 
-                    if self._on_result and self._loop:
-                        self._loop.call_soon_threadsafe(
-                            lambda: asyncio.create_task(
-                                self._on_result(stash_text, is_final=False)
+                    if self._on_result and self._loop and not self._loop.is_closed():
+                        try:
+                            self._loop.call_soon_threadsafe(
+                                lambda s=stash_text: asyncio.create_task(
+                                    self._on_result(s, is_final=False)
+                                )
                             )
-                        )
+                        except RuntimeError as e:
+                            if "Event loop is closed" in str(e):
+                                logger.warning("Omni ASR 回调时事件循环已关闭，跳过此次回调")
+                            else:
+                                raise
                     elif self._on_result:
                         self._result_queue.append((stash_text, False))
 
@@ -144,12 +156,18 @@ class OmniAsrCallback(OmniRealtimeCallback):
                         self.result_text = final_text
                         logger.debug(f"Omni ASR 最终结果：{final_text}")
 
-                        if self._on_result and self._loop:
-                            self._loop.call_soon_threadsafe(
-                                lambda: asyncio.create_task(
-                                    self._on_result(final_text, is_final=True)
+                        if self._on_result and self._loop and not self._loop.is_closed():
+                            try:
+                                self._loop.call_soon_threadsafe(
+                                    lambda f=final_text: asyncio.create_task(
+                                        self._on_result(f, is_final=True)
+                                    )
                                 )
-                            )
+                            except RuntimeError as e:
+                                if "Event loop is closed" in str(e):
+                                    logger.warning("Omni ASR 回调时事件循环已关闭，跳过此次回调")
+                                else:
+                                    raise
                         elif self._on_result:
                             self._result_queue.append((final_text, True))
         except Exception as e:
@@ -309,6 +327,7 @@ class QwenASRProcessor:
         """
         import time
         receive_time = time.time() * 1000
+
         logger.info(f"[ASR] 收到声学VAD音频流, 时间: {receive_time:.0f}ms, 数据大小: {len(audio_chunk)} bytes")
 
         if not self._is_streaming:

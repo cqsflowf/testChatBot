@@ -77,6 +77,10 @@ class ConnectionManager:
         system.on_clear_audio(lambda: asyncio.create_task(
             self.send_clear_audio(client_id)
         ))
+        # 注册 TTS 状态变化回调
+        system.on_tts_state_change(lambda enabled: asyncio.create_task(
+            self.send_tts_state(client_id, enabled)
+        ))
 
         logger.info(f"客户端连接: {client_id}")
 
@@ -276,6 +280,14 @@ class ConnectionManager:
             "data": data.to_dict() if hasattr(data, 'to_dict') else data
         })
 
+    async def send_tts_state(self, client_id: str, enabled: bool):
+        """发送 TTS 状态变化"""
+        await self.send_json(client_id, {
+            "type": "tts_state",
+            "data": {"enabled": enabled}
+        })
+        logger.info(f"[TTS] 已通知客户端 TTS 状态: {enabled}")
+
     def get_system(self, client_id: str) -> VoiceDialogSystem:
         return self.dialog_systems.get(client_id)
 
@@ -291,6 +303,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         while True:
             data = await websocket.receive()
 
+            # 检查是否是断开消息
+            if data.get("type") == "websocket.disconnect":
+                logger.info(f"客户端 {client_id} 发送断开消息")
+                break
+
             if "text" in data:
                 # JSON消息
                 message = json.loads(data["text"])
@@ -302,9 +319,20 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await handle_audio(client_id, audio_chunk)
 
     except WebSocketDisconnect:
+        logger.info(f"客户端 {client_id} WebSocket 断开")
+        manager.disconnect(client_id)
+    except RuntimeError as e:
+        # 处理 "Cannot call receive once a disconnect message has been received" 错误
+        if "disconnect" in str(e).lower():
+            logger.info(f"客户端 {client_id} 连接已断开")
+        else:
+            logger.error(f"WebSocket RuntimeError: {e}")
         manager.disconnect(client_id)
     except Exception as e:
         logger.error(f"WebSocket错误: {e}")
+        manager.disconnect(client_id)
+    finally:
+        # 确保清理资源
         manager.disconnect(client_id)
 
 
@@ -331,6 +359,37 @@ async def handle_message(client_id: str, message: dict):
         # 重置
         system.reset()
         await manager.send_json(client_id, {"type": "reset", "data": {"success": True}})
+
+    elif msg_type == "tts_enable":
+        # 启用 TTS
+        system.enable_tts()
+        await manager.send_json(client_id, {
+            "type": "tts_state",
+            "data": {"enabled": True}
+        })
+
+    elif msg_type == "tts_disable":
+        # 禁用 TTS
+        system.disable_tts()
+        await manager.send_json(client_id, {
+            "type": "tts_state",
+            "data": {"enabled": False}
+        })
+
+    elif msg_type == "tts_toggle":
+        # 切换 TTS 状态
+        new_state = system.toggle_tts()
+        await manager.send_json(client_id, {
+            "type": "tts_state",
+            "data": {"enabled": new_state}
+        })
+
+    elif msg_type == "tts_status":
+        # 查询 TTS 状态
+        await manager.send_json(client_id, {
+            "type": "tts_state",
+            "data": {"enabled": system.tts_enabled}
+        })
 
     elif msg_type == "ping":
         # 心跳

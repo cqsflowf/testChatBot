@@ -491,10 +491,10 @@ class SemanticVADProcessor:
             )
 
         # 4. 纯文本长度足够（>= 4个有效字符）→ 可能完整
-        # 降低长度要求，让用户说完后更容易被判断为完整
+        # v3.6: 保持长度要求为4，但不检查结束特征，避免大段话中间被截断
         if text_length >= 4:
             # 检查是否像是在说话中途
-            mid_sentence_hints = ["而且", "并且", "然后", "还有", "另外", "还有呢"]
+            mid_sentence_hints = ["而且", "并且", "然后", "还有", "另外", "还有呢", "接着", "之后", "同时"]
             is_mid_sentence = any(hint in text for hint in mid_sentence_hints)
             if not is_mid_sentence:
                 return SemanticVADResult(
